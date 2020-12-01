@@ -1,0 +1,439 @@
+---
+output:
+  html_document: default
+  pdf_document: default
+---
+---
+
+# Mini Projeto - Data Science Academy
+
+### André Campos da Silva
+### 21 de Novembro, 2020
+
+## Projeto  -  Demanda de Estoque
+Construir um modelo de analise que analise os dados históricos com as demandas de estoque e seja capaz
+de fazer novas previsões de demanda de estoque com dados fornecidos futuramente
+ 
+https://www.kaggle.com/c/grupo-bimbo-inventory-demand/data
+
+## Coletando os dados
+
+``` {r}
+# Carrego os pacotes necessários para o projeto
+library('tidyverse')
+library('caret')
+library('ROSE')
+library('data.table')
+library('gridExtra')
+library('randomForest')
+library('DMwR')
+library('gridExtra')
+library('caTools')
+library('e1071')
+library('rpart')
+```
+
+
+
+
+```{r}
+# Carrego os dados de treino que sera tratado e usado para a analise e treinamento.
+
+client_tbl <- read_csv('Dados/cliente_tabla.csv')
+produto_tbl <- read_csv('Dados/producto_tabla.csv')
+estado_tbl <- read_csv('Dados/town_state.csv')
+train <- read_csv('Dados/train_sample.csv')
+```
+
+```{r}
+# Faço uma verificação do formato dos dados e das primeiras linhas e verifico se 
+# exisite algum valor nulo que precise se tratado.
+glimpse(train)
+glimpse(client_tbl)
+glimpse(produto_tbl)
+glimpse(estado_tbl)
+head(train)
+head(client_tbl)
+head(produto_tbl)
+head(estado_tbl)
+any(is.na(train))
+any(is.na(client_tbl))
+any(is.na(produto_tbl))
+any(is.na(estado_tbl))
+```
+
+
+## Tratamento dos dados
+
+```{r}
+# Formula para tirar os espaços entre nomes. 
+tira_espaco <- function(x){
+    str_replace_all(x,' ', '_')
+  }
+```
+
+```{r}
+# Tiro os espaços em todos os campos de todas as tabelas. 
+client_tbl$NombreCliente <- sapply(client_tbl$NombreCliente, tira_espaco)
+produto_tbl$NombreProducto <- sapply(produto_tbl$NombreProducto, tira_espaco)
+estado_tbl$Town <- sapply(estado_tbl$Town , tira_espaco)
+estado_tbl$State <- sapply(estado_tbl$State , tira_espaco)
+```
+
+```{r}
+# Crio um novo dataset onde faço os joins entre as tabelas para a analise exploratória
+train2 <- train %>%
+  left_join(client_tbl, by = 'Cliente_ID') %>%
+  left_join(produto_tbl, by = 'Producto_ID') %>%
+  left_join(estado_tbl, by = 'Agencia_ID')
+```
+
+```{r}
+# Retiro as variaveis ID desse dataset pois não é necessário para a análise. 
+train2$Agencia_ID = NULL 
+train2$Canal_ID = NULL 
+train2$Ruta_SAK = NULL
+train2$Cliente_ID = NULL
+train2$Producto_ID = NULL 
+names(train2)
+head(train2)
+any(is.na(train2))
+str(train2)
+```
+
+## Analise Exploratória 
+
+```{r}
+# Medidas de Tendência Central 
+summary(train2[c('Venta_uni_hoy','Venta_hoy','Dev_uni_proxima','Dev_proxima','Demanda_uni_equil')])
+```
+
+```{r}
+# Total de unidades vendidas e valor total das vendas agrupado por semana.
+
+# Existe um padrão entre a quantidade de vendas em unidades com a receite recebida por semana, assim como as devoluções em unidades com os prejuizos referentes a essas devoluções. 
+train2 %>%
+  select(Semana, Venta_uni_hoy, Venta_hoy,Dev_uni_proxima,Dev_proxima)%>%
+  group_by(Semana)%>%
+  summarise(Total_Unidades = sum(Venta_uni_hoy),
+            Total_Lucro = sum(Venta_hoy),
+            Total_Unidades_Devolvidas = sum(Dev_uni_proxima),
+            Total_Devolução = sum(Dev_proxima))
+
+p1 <- train2 %>%
+  select(Semana, Venta_uni_hoy)%>%
+  group_by(Semana)%>%
+  summarise(Total_Unidades = sum(Venta_uni_hoy)) %>%
+  ggplot(aes(x =as.factor(Semana), y =Total_Unidades)) + 
+  geom_bar(stat = "identity",color = "white", fill = "lightblue") +
+  labs(title = 'Unidades vendidas por semana',
+       x = 'semana', y = 'Quantidade')
+
+p2 <- train2 %>%
+  select(Semana, Venta_hoy)%>%
+  group_by(Semana)%>%
+  summarise(Total_Lucro = sum(Venta_hoy)) %>%
+  ggplot(aes(x= as.factor(Semana), y =Total_Lucro)) + 
+  geom_bar(stat = "identity",color = "white", fill = "lightblue") +
+  labs(title = 'total de lucro',
+       x = 'semana', y = 'Lucro-$') 
+
+p3 <- train2 %>%
+  select(Semana, Dev_uni_proxima)%>%
+  group_by(Semana)%>%
+  summarise(Total_Unidades_Devolvidas = sum(Dev_uni_proxima)) %>%
+  ggplot(aes(x =as.factor(Semana), y =Total_Unidades_Devolvidas)) + 
+  geom_bar(stat = "identity",color = "white", fill = "lightblue") +
+  labs(title = 'Total de devolução - Unit.',
+       x = 'semana', y = 'Quantidade')
+
+p4 <- train2 %>%
+  select(Semana, Dev_proxima)%>%
+  group_by(Semana)%>%
+  summarise(Total_Devolução = sum(Dev_proxima)) %>%
+  ggplot(aes(x= as.factor(Semana), y =Total_Devolução)) + 
+  geom_bar(stat = "identity",color = "white", fill = "lightblue") +
+  labs(title = 'Total de Prejuízo ',
+       x = 'semana', y = 'Prejuízo-$')
+
+grid.arrange(p1,p2,p3,p4 ,nrow=2,ncol=2)
+```
+
+
+```{r}
+# Estado de  Mexico, Jalisco  e Mexico.DF são os Estados que mais geram vendas e lucros. 
+train2 %>%
+  select(State, Venta_uni_hoy, Venta_hoy,Dev_uni_proxima,Dev_proxima)%>%
+  group_by(State)%>%
+  summarise(Total_Unidades = sum(Venta_uni_hoy),
+            Total_Lucro = sum(Venta_hoy),
+            Total_Unidades_Devolvidas = sum(Dev_uni_proxima),
+            Total_Devolução = sum(Dev_proxima))
+
+
+p5 <- train2 %>%
+  select(State, Venta_uni_hoy)%>%
+  group_by(State)%>%
+  summarise(Total_Unidades = sum(Venta_uni_hoy)) %>%
+  ggplot(aes(y =as.factor(State), x =Total_Unidades)) + 
+  geom_bar(stat = "identity",color = "white", fill = "lightblue") +
+  labs(title = 'Unidades vendidas',
+       y = 'Estado', x = 'Quantidade')
+
+p6 <- train2 %>%
+  select(State, Venta_hoy)%>%
+  group_by(State)%>%
+  summarise(Total_Lucro = sum(Venta_hoy)) %>%
+  ggplot(aes(y = as.factor(State), x =Total_Lucro)) + 
+  geom_bar(stat = "identity",color = "white", fill = "lightblue") +
+  labs(title = 'Lucro',
+       y = 'Estado', x = 'Lucro-$') 
+
+p5
+p6
+```
+
+ 
+```{r}
+# Por serem os estados que mais compra os produtos, consequentemente são os que mais devolvem para troca. 
+p7 <- train2 %>%
+  select(State, Dev_uni_proxima)%>%
+  group_by(State)%>%
+  summarise(Total_Unidades_Devolvidas = sum(Dev_uni_proxima)) %>%
+  ggplot(aes(y=as.factor(State), x =Total_Unidades_Devolvidas)) + 
+  geom_bar(stat = "identity",color = "white", fill = "lightblue") +
+  labs(title = 'Unidades devolvidas',
+       y = 'Estado', x = 'Quantidade')
+
+p8 <- train2 %>%
+  select(State, Dev_proxima)%>%
+  group_by(State)%>%
+  summarise(Total_Devolução = sum(Dev_proxima)) %>%
+  ggplot(aes(y = as.factor(State), x =Total_Devolução)) + 
+  geom_bar(stat = "identity",color = "white", fill = "lightblue") +
+  labs(title = 'Prejuízo ',
+       y = 'Estado', x = 'Prejuízo-$')
+
+p7
+p8
+```
+
+```{r}
+# Top 10 dos produtos mais vendidos por unidade e Top 10 dos mais Lucrativos. 
+p9 <- train2 %>%
+  select(NombreProducto, Venta_uni_hoy)%>%
+  group_by(NombreProducto)%>%
+  summarise(Total_Unidades = sum(Venta_uni_hoy)) %>%
+  filter(Total_Unidades >= 15800)%>%
+  ggplot(aes(y = as.factor(NombreProducto), x =Total_Unidades)) + 
+  geom_bar(stat = "identity",color = "white", fill = "lightblue") +
+  labs(title = 'Top 10 - Produtos mais vendidos ',
+       y = 'Produto', x = 'Quantidade')
+
+p10 <- train2 %>%
+  select(NombreProducto, Venta_hoy)%>%
+  group_by(NombreProducto)%>%
+  summarise(Lucro= sum(Venta_hoy)) %>%
+  filter(Lucro >= 125000) %>%
+  ggplot(aes(y = as.factor(NombreProducto), x = Lucro)) + 
+  geom_bar(stat = "identity",color = "white", fill = "lightblue") +
+  labs(title = 'Top 10 - Produtos mais Lucrativos ',
+       y = 'Produto', x = 'Lucro - $')
+
+grid.arrange(p9,p10,nrow=2,ncol=1)
+```
+
+```{r}
+# Top 10 dos produtos com mais devolução e o top 10 dos que dão mais prejuízo.
+p11 <- train2 %>%
+  select(NombreProducto, Dev_uni_proxima)%>%
+  group_by(NombreProducto)%>%
+  summarise(Quantidade_devolucao = sum(Dev_uni_proxima)) %>%
+  filter(Quantidade_devolucao >= 260) %>%
+  ggplot(aes(y = as.factor(NombreProducto), x =  Quantidade_devolucao)) + 
+  geom_bar(stat = "identity",color = "white", fill = "lightblue") +
+  labs(title = 'Top 10 - Produtos com mais devolução',
+       y = 'Produto', x = 'Quantidade')
+
+p12 <- train2 %>%
+  select(NombreProducto, Dev_proxima)%>%
+  group_by(NombreProducto)%>%
+  summarise(Prejuizo = sum(Dev_proxima)) %>%
+  filter(Prejuizo >= 2270) %>%
+  ggplot(aes(y = as.factor(NombreProducto), x =  Prejuizo)) + 
+  geom_bar(stat = "identity",color = "white", fill = "lightblue") +
+  labs(title = 'Top 10 - Produtos que dão mais prejuizo',
+       y = 'Produto', x = 'Prejuizo - $')
+
+grid.arrange(p11,p12,nrow=2,ncol=1)
+```
+
+
+```{r}
+# Top 10 dos clientes que mais compram e os que mais geram prejuizo. 
+p13 <- train2 %>%
+  select(NombreCliente, Venta_hoy)%>%
+  group_by(NombreCliente)%>%
+  summarise(Total = sum(Venta_hoy)) %>%
+  filter(Total >= 15000)%>%
+  ggplot(aes(y = as.factor(NombreCliente), x =  Total)) + 
+  geom_bar(stat = "identity",color = "white", fill = "lightblue") +
+  labs(title = 'Top 10 - Clientes que mais compram',
+       y = 'Cliente', x = 'Lucro - $')
+
+
+p14 <- train2 %>%
+  select(NombreCliente, Dev_proxima)%>%
+  group_by(NombreCliente)%>%
+  summarise(Total = sum(Dev_proxima)) %>%
+  filter(Total >= 820)%>%
+  ggplot(aes(y = as.factor(NombreCliente), x =  Total)) + 
+  geom_bar(stat = "identity",color = "white", fill = "lightblue") +
+  labs(title = 'Top 10 - Clientes que mais geram prejuizo',
+       y = 'Cliente', x = 'Prejuizo - $')
+
+grid.arrange(p13,p14,nrow=2,ncol=1)
+```
+ 
+```{r}
+# Top 20 dos produtos que mais geram estoque em media
+p15 <- train2 %>%
+  select(NombreProducto, Demanda_uni_equil)%>%
+  group_by(NombreProducto,)%>%
+  summarise(Total = mean(Demanda_uni_equil))%>%
+  filter(Total > 177)%>% 
+  ggplot(aes(y = as.factor(NombreProducto), x =  Total)) + 
+  geom_bar(stat = "identity",color = "white", fill = "lightblue") +
+  labs(title = 'Top 20 - Produtos que mais geram estoque',
+       y = 'Produto', x = 'Quantidade')
+p15
+```
+
+## Split dos dados 
+
+```{r}
+# Faço o split dos dados para treinar e testar os algoritmos de regreção. 
+
+split <- sample.split(train$Canal_ID, SplitRatio = 0.80)
+
+trainModel = subset(train, split == TRUE)
+testModel = subset(train, split == FALSE)
+nrow(trainModel)
+nrow(testModel)
+
+names(train)
+```
+
+## Algoritmos de aprendizagem 
+
+```{r}
+# Modelo com Regressão linear
+
+modelo_v1 <- lm(Demanda_uni_equil ~ Canal_ID
+                +Ruta_SAK
+                +Producto_ID
+                +Cliente_ID
+                +Venta_uni_hoy
+                +Dev_uni_proxima,
+                data = trainModel)
+
+summary(modelo_v1)
+
+previsao_v1 <- predict(modelo_v1, testModel)
+head(cbind(round(previsao_v1), testModel$Demanda_uni_equil))
+tail(cbind(round(previsao_v1), testModel$Demanda_uni_equil))
+
+# Accuracy
+mae_1 = MAE(testModel$Demanda_uni_equil,round(previsao_v1))
+rmse_1 = RMSE(testModel$Demanda_uni_equil,round(previsao_v1))
+r2_1 = R2(testModel$Demanda_uni_equil,round(previsao_v1))
+
+cat(" MAE:", mae_1, "\n", 
+    "RMSE:", rmse_1, "\n", "R-squared:", r2_1)
+
+```
+
+
+```{r}
+# Modelo com o randomForest
+
+modelo_v2 <- randomForest(Demanda_uni_equil ~ Canal_ID
+                          +Ruta_SAK
+                          +Producto_ID
+                          +Cliente_ID
+                          +Venta_uni_hoy
+                          +Dev_uni_proxima,
+                          data = trainModel,
+                          ntree = 40, 
+                          nodesize = 5)
+
+print(modelo_v2)
+previsao_v2 <- predict(modelo_v2, testModel)
+head(cbind(round(previsao_v2), testModel$Demanda_uni_equil))
+tail(cbind(round(previsao_v2), testModel$Demanda_uni_equil))
+
+# Accuracy
+mae_2 = MAE(testModel$Demanda_uni_equil,round(previsao_v2))
+rmse_2 = RMSE(testModel$Demanda_uni_equil,round(previsao_v2))
+r2_2 = R2(testModel$Demanda_uni_equil,round(previsao_v2))
+
+cat(" MAE:", mae_2, "\n", 
+    "RMSE:", rmse_2, "\n", "R-squared:", r2_2)
+```
+
+
+```{r}
+# Modelo com o SVM
+
+modelo_v3 <- svm(Demanda_uni_equil ~ Canal_ID
+                 +Ruta_SAK
+                 +Producto_ID
+                 +Cliente_ID
+                 +Venta_uni_hoy
+                 +Dev_uni_proxima,
+                 data = trainModel)
+
+previsao_v3 <- predict(modelo_v3, testModel)
+head(cbind(round(previsao_v3), testModel$Demanda_uni_equil))
+tail(cbind(round(previsao_v3), testModel$Demanda_uni_equil))
+
+# Accuracy
+mae_3 = MAE(testModel$Demanda_uni_equil,round(previsao_v3))
+rmse_3 = RMSE(testModel$Demanda_uni_equil,round(previsao_v3))
+r2_3 = R2(testModel$Demanda_uni_equil,round(previsao_v3))
+
+cat(" MAE:", mae_3, "\n", 
+    "RMSE:", rmse_3, "\n", "R-squared:", r2_3)
+```
+
+
+```{r}
+# Modelo com o rpart
+
+modelo_v4 <- rpart(Demanda_uni_equil ~ Canal_ID
+                 +Ruta_SAK
+                 +Producto_ID
+                 +Cliente_ID
+                 +Venta_uni_hoy
+                 +Dev_uni_proxima,
+                 data = trainModel,
+                 method = 'anova')
+
+previsao_v4 <- predict(modelo_v4, testModel,method = 'anova')
+head(cbind(round(previsao_v4), testModel$Demanda_uni_equil))
+tail(cbind(round(previsao_v4), testModel$Demanda_uni_equil))
+printcp(modelo_v4)
+# Accuracy
+mae_4 = MAE(testModel$Demanda_uni_equil,round(previsao_v4))
+rmse_4 = RMSE(testModel$Demanda_uni_equil,round(previsao_v4))
+r2_4 = R2(testModel$Demanda_uni_equil,round(previsao_v4))
+
+cat(" MAE:", mae_4, "\n", 
+    "RMSE:", rmse_4, "\n", "R-squared:", r2_4)
+
+printcp(modelo_v4)
+```
+
+
+#### Os algoritmos LM e RandomForest tiveram uma eficácia maior nas previsões com relação aos SVM e Rpart, para entregar para o cliente ficaria com mu dos dois primeiros. 
+
